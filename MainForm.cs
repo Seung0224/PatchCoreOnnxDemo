@@ -1,6 +1,8 @@
 ﻿using System;
 using System.IO;
 using System.Linq;
+using System.Text;
+using System.Drawing;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.ML.OnnxRuntime;
@@ -16,9 +18,14 @@ namespace PatchCoreOnnxDemo
         private InferenceSession _session = null;
         private readonly PreprocessConfig _pp = new PreprocessConfig(); // 256→CenterCrop224 + ImageNet mean/std
 
+        // 최근 추론 결과(히트맵용)
+        private float[] _lastPatchMin;     // length = GridH*GridW (ex. 196)
+        private string _lastImagePath;
+
         // ==== UI ====
         private Button btnLoadExport;
         private Button btnRunImage;
+        private Button btnOverlay;
         private Label lblExport;
         private Label lblResult;
 
@@ -27,15 +34,15 @@ namespace PatchCoreOnnxDemo
             InitializeComponent();
 
             Text = "PatchCore L3-only (.NET 4.8.1)";
-            Width = 680;
-            Height = 220;
+            Width = 720;
+            Height = 260;
 
             btnLoadExport = new Button
             {
                 Text = "1) Export 폴더 선택...",
                 Left = 20,
                 Top = 20,
-                Width = 200,
+                Width = 220,
                 Height = 32
             };
             btnLoadExport.Click += BtnLoadExport_Click;
@@ -46,19 +53,31 @@ namespace PatchCoreOnnxDemo
                 Text = "2) 이미지 선택 & 추론",
                 Left = 20,
                 Top = 70,
-                Width = 200,
+                Width = 220,
                 Height = 32,
                 Enabled = false
             };
             btnRunImage.Click += BtnRunImage_Click;
             Controls.Add(btnRunImage);
 
+            btnOverlay = new Button
+            {
+                Text = "3) 원본+Heatmap 저장",
+                Left = 20,
+                Top = 120,
+                Width = 220,
+                Height = 32,
+                Enabled = false
+            };
+            btnOverlay.Click += BtnOverlay_Click;
+            Controls.Add(btnOverlay);
+
             lblExport = new Label
             {
                 AutoSize = false,
-                Left = 240,
+                Left = 260,
                 Top = 25,
-                Width = 400,
+                Width = 420,
                 Height = 24,
                 Text = "Export: (미선택)"
             };
@@ -67,10 +86,10 @@ namespace PatchCoreOnnxDemo
             lblResult = new Label
             {
                 AutoSize = false,
-                Left = 240,
-                Top = 75,
-                Width = 400,
-                Height = 60,
+                Left = 260,
+                Top = 70,
+                Width = 420,
+                Height = 100,
                 Text = "결과: -"
             };
             Controls.Add(lblResult);
@@ -87,19 +106,28 @@ namespace PatchCoreOnnxDemo
                 {
                     try
                     {
-                        // 아티팩트 로드
                         _exportDir = fbd.SelectedPath;
-                        _artifacts = Artifacts.Load(_exportDir); // wrn50_l3.onnx 경로/갤러리/임계값 로드
+
+                        // 아티팩트 로드
+                        _artifacts = Artifacts.Load(_exportDir);
+
                         _session?.Dispose();
                         _session = OnnxRunner.CreateSession(_artifacts.OnnxPath);
 
+                        // 상태 초기화
+                        _lastPatchMin = null;
+                        _lastImagePath = null;
+
                         lblExport.Text = $"Export: {_exportDir}";
-                        btnRunImage.Enabled = true;
                         lblResult.Text = "결과: (준비됨)";
+                        btnRunImage.Enabled = true;
+                        btnOverlay.Enabled = false;
                     }
                     catch (Exception ex)
                     {
                         MessageBox.Show(this, ex.Message, "Export 로드 실패", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        btnRunImage.Enabled = false;
+                        btnOverlay.Enabled = false;
                     }
                 }
             }
@@ -114,13 +142,14 @@ namespace PatchCoreOnnxDemo
                 if (ofd.ShowDialog(this) != DialogResult.OK) return;
 
                 btnRunImage.Enabled = false;
+                btnOverlay.Enabled = false;
                 lblResult.Text = "결과: 추론 중...";
 
                 try
                 {
                     var imagePath = ofd.FileName;
 
-                    // 비동기 실행(간단히 Task.Run) — UI Freeze 방지
+                    // 백그라운드에서 추론 실행
                     var result = await Task.Run(() =>
                     {
                         // 1) 전처리 → 입력 텐서 [1,3,224,224]
@@ -141,26 +170,77 @@ namespace PatchCoreOnnxDemo
                         Distance.RowwiseMinDistances(
                             pe.RowsRowMajor, pe.Patches, pe.Dim,
                             _artifacts.Gallery, _artifacts.GalleryRows,
-                            "ip", patchMin); // "ip" = inner product -> cosine(정규화 전제)
+                            "ip", patchMin);
 
                         float imgScore = patchMin.Max();
                         bool isAnomaly = imgScore > _artifacts.Threshold;
-                        return (imgScore, isAnomaly, imagePath);
+
+                        return new InferOut
+                        {
+                            ImageScore = imgScore,
+                            IsAnomaly = isAnomaly,
+                            ImagePath = imagePath,
+                            PatchMin = patchMin
+                        };
                     });
 
-                    var label = result.isAnomaly ? "NotGood" : "Good";
-                    lblResult.Text = $"결과: score={result.imgScore:F6} / thr={_artifacts.Threshold:F6} → {label}\n({Path.GetFileName(result.imagePath)})";
+                    // 결과 표시 + 나중에 히트맵용으로 저장
+                    _lastPatchMin = result.PatchMin;
+                    _lastImagePath = result.ImagePath;
+
+                    var label = result.IsAnomaly ? "NotGood" : "Good";
+                    lblResult.Text = $"결과: score={result.ImageScore:F6} / thr={_artifacts.Threshold:F6} → {label}\n({Path.GetFileName(result.ImagePath)})";
+
+                    btnOverlay.Enabled = true;
                 }
                 catch (Exception ex)
                 {
                     MessageBox.Show(this, ex.Message, "추론 실패", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     lblResult.Text = "결과: 오류";
+                    btnOverlay.Enabled = false;
                 }
                 finally
                 {
                     btnRunImage.Enabled = true;
                 }
             }
+        }
+
+        private void BtnOverlay_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (_lastPatchMin == null || _lastImagePath == null)
+                {
+                    MessageBox.Show(this, "먼저 추론을 실행해 주세요.", "알림",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                using (var bmp = new Bitmap(_lastImagePath))
+                using (var ov = HeatmapOverlay.MakeOverlay(
+                    bmp, _lastPatchMin, _artifacts.GridH, _artifacts.GridW,
+                    clipQ: 0.98f, gamma: 1.8f, alphaMin: 0.02f, alphaMax: 0.50f))
+                {
+                    string save = Path.ChangeExtension(_lastImagePath, ".overlay.png");
+                    ov.Save(save);
+                    MessageBox.Show(this, $"저장됨: {save}", "완료",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "히트맵 생성 실패",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private sealed class InferOut
+        {
+            public float ImageScore { get; set; }
+            public bool IsAnomaly { get; set; }
+            public string ImagePath { get; set; }
+            public float[] PatchMin { get; set; }
         }
     }
 }
