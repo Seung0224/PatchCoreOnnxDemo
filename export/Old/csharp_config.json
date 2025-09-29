@@ -1,0 +1,33 @@
+{
+  "preprocess": {
+    "resize": 224,
+    "normalize_mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "normalize_std": [
+      0.229,
+      0.224,
+      0.225
+    ]
+  },
+  "model": {
+    "backbone": "wideresnet50_2",
+    "layers": [
+      "layer2",
+      "layer3"
+    ],
+    "target_embed_dim": 1024,
+    "patchsize": 3,
+    "projector": {
+      "type": null,
+      "matrix": null,
+      "bias": null
+    }
+  },
+  "inference": {
+    "k": 1,
+    "faiss_index": "nnscorer_search_index.faiss"
+  }
+}

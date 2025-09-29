@@ -51,10 +51,14 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Artifacts\ArtifactLoader.cs" />
+    <Compile Include="Artifacts\ParamsMeta.cs" />
     <Compile Include="Config\PreprocessConfig.cs" />
-    <Compile Include="Image\BitmapUtils.cs" />
-    <Compile Include="Image\ImagePreprocessor.cs" />
+    <Compile Include="Config\BitmapUtils.cs" />
+    <Compile Include="Config\ImagePreprocessor.cs" />
     <Compile Include="Config\JsonConfig.cs" />
+    <Compile Include="Core\AnomalyScorer.cs" />
+    <Compile Include="Core\Distance.cs" />
     <Compile Include="MainForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -62,7 +66,7 @@
       <DependentUpon>MainForm.cs</DependentUpon>
     </Compile>
     <Compile Include="Onnx\OnnxRunner.cs" />
-    <Compile Include="Patch\PatchEmbedder.cs" />
+    <Compile Include="Core\PatchEmbedder.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <EmbeddedResource Include="Properties\Resources.resx">

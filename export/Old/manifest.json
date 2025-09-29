@@ -1,0 +1,22 @@
+{
+  "export_time_unix": 1759109463,
+  "data_name": "bottle",
+  "run_name": "models",
+  "model_dir": "/content/patchcore_all/models/MVTecAD_Results/IM224_WR50_L2-3_P01_D1024-1024_PS-3_AN-1_S0_ORIG/models/mvtec_bottle",
+  "export_dir": "/content/patchcore_all/artifacts/models_bottle",
+  "files": [
+    "nnscorer_search_index.faiss",
+    "patchcore_params.pkl"
+  ],
+  "hints": {
+    "backbone": "wideresnet50",
+    "layers": [
+      "layer2",
+      "layer3"
+    ],
+    "target_embed_dimension": 1024,
+    "anomaly_scorer": "nearest-neighbor",
+    "patchsize": 3,
+    "note": "faiss-gpu 미사용 시 CPU IndexFlat 저장"
+  }
+}
