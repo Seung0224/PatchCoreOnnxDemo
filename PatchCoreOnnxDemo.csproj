@@ -51,12 +51,18 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Config\PreprocessConfig.cs" />
+    <Compile Include="Image\BitmapUtils.cs" />
+    <Compile Include="Image\ImagePreprocessor.cs" />
+    <Compile Include="Config\JsonConfig.cs" />
     <Compile Include="MainForm.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="MainForm.Designer.cs">
       <DependentUpon>MainForm.cs</DependentUpon>
     </Compile>
+    <Compile Include="Onnx\OnnxRunner.cs" />
+    <Compile Include="Patch\PatchEmbedder.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <EmbeddedResource Include="Properties\Resources.resx">
