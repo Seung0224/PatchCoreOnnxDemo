@@ -1,0 +1,25 @@
+{
+  "backbone": "wide_resnet50_2",
+  "layers": [
+    "layer3"
+  ],
+  "input_size": 224,
+  "mean": [
+    0.485,
+    0.456,
+    0.406
+  ],
+  "std": [
+    0.229,
+    0.224,
+    0.225
+  ],
+  "patchsize": 3,
+  "grid": [
+    14,
+    14
+  ],
+  "metric": "cosine",
+  "data_name": "bottle",
+  "model_dir": "/content/work/models/MVTecAD_Results/IM224_WR50_L3_ONLY_P01_D1024_PS-3_AN-1_20250929/models/mvtec_bottle"
+}

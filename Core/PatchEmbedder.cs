@@ -1,175 +1,165 @@
-﻿using Microsoft.ML.OnnxRuntime.Tensors;
-using System;
+﻿using System;
 using System.Linq;
+using Microsoft.ML.OnnxRuntime.Tensors;
 
 namespace PatchCoreOnnxDemo
 {
-    public sealed class PatchEmbeddings
-    {
-        public int GridH;   // 14
-        public int GridW;   // 14
-        public int Dim;     // 1536
-        public int Patches; // 196
-        public float[] RowsRowMajor; // length = Patches * Dim
-    }
-
+    /// <summary>
+    /// L3-only PatchCore 임베딩 생성 유틸.
+    /// ONNX 출력(layer3: [1, 1024, 14, 14]) → (196 × 1024) row-major + 행 L2 정규화.
+    /// </summary>
     public static class PatchEmbedder
     {
-        public static PatchEmbeddings Build(Tensor<float> l2t, Tensor<float> l3t)
+        /// <summary>
+        /// ONNX의 layer3 텐서(형상 [1, C=1024, H=14, W=14])에서
+        /// 패치 임베딩 (P=H*W=196, D=1024) 를 생성한다. 각 행은 L2 정규화된다.
+        /// </summary>
+        public static PatchEmbeddings BuildFromL3(Tensor<float> l3t)
         {
-            DenseTensor<float> l2 = l2t as DenseTensor<float> ?? ToDense(l2t);
-            DenseTensor<float> l3 = l3t as DenseTensor<float> ?? ToDense(l3t);
-
-            CheckShape4D(l2, "l2");
+            var l3 = l3t as DenseTensor<float> ?? ToDense(l3t);
             CheckShape4D(l3, "l3");
 
-            int c2 = l2.Dimensions[1], h2 = l2.Dimensions[2], w2 = l2.Dimensions[3];
-            int c3 = l3.Dimensions[1], h3 = l3.Dimensions[2], w3 = l3.Dimensions[3];
+            int n = l3.Dimensions[0];               // 1
+            int c = l3.Dimensions[1];               // 1024
+            int h = l3.Dimensions[2];               // 14
+            int w = l3.Dimensions[3];               // 14
+            if (n != 1) throw new ArgumentException($"Expected batch=1, but got {n}.");
 
-            float[] l2CHW = ToCHWArray(l2);
-            float[] l3CHW = ToCHWArray(l3);
+            // CHW contiguous 배열로 평탄화
+            float[] chw = ToCHWArray(l3);
 
-            if (h2 != h3 || w2 != w3)
-                l2CHW = ResizeBilinearCHW(l2CHW, c2, h2, w2, h3, w3);
+            // (H*W, C) = (196, 1024) row-major
+            float[] rows = CHW_to_PatchesRowMajor(chw, c, h, w);
 
-            float[] catCHW = ConcatChannelsCHW(l2CHW, c2, l3CHW, c3, h3, w3);
-            int dim = c2 + c3;
-            int patches = h3 * w3;
+            // 행별 L2 정규화
+            L2NormalizeRowsInPlace(rows, h * w, c);
 
-            float[] rows = CHW_to_PatchesRowMajor(catCHW, dim, h3, w3);
-            L2NormalizeRowsInPlace(rows, patches, dim);
-
-            PatchEmbeddings pe = new PatchEmbeddings();
-            pe.GridH = h3; pe.GridW = w3; pe.Dim = dim; pe.Patches = patches;
-            pe.RowsRowMajor = rows;
-            return pe;
+            return new PatchEmbeddings
+            {
+                GridH = h,
+                GridW = w,
+                Dim = c,           // 1024
+                Patches = h * w,   // 196
+                RowsRowMajor = rows
+            };
         }
+
+        // -------------------- helpers --------------------
 
         private static DenseTensor<float> ToDense(Tensor<float> t)
         {
-            int[] dims = new int[t.Dimensions.Length];
-            for (int i = 0; i < dims.Length; i++) dims[i] = t.Dimensions[i];
-
-            float[] data = t.ToArray();
-            try { return new DenseTensor<float>(data, dims); }
-            catch
-            {
-                DenseTensor<float> dense = new DenseTensor<float>(dims);
-                try
-                {
-                    var span = dense.Buffer.Span;
-                    for (int i = 0; i < data.Length; i++) span[i] = data[i];
-                }
-                catch
-                {
-                    for (int i = 0; i < data.Length; i++) dense.SetValue(i, data[i]);
-                }
-                return dense;
-            }
+            // Tensor<float> 를 DenseTensor<float>로 복제
+            var dims = t.Dimensions.ToArray();
+            var dense = new DenseTensor<float>(dims);
+            var spanDst = dense.Buffer.Span;
+            int idx = 0;
+            foreach (var v in t) spanDst[idx++] = v;
+            return dense;
         }
 
         private static void CheckShape4D(DenseTensor<float> t, string name)
         {
-            if (t.Dimensions.Length != 4 || t.Dimensions[0] != 1)
-                throw new ArgumentException(name + " must be shape [1,C,H,W]");
+            if (t.Rank != 4)
+                throw new ArgumentException($"{name} must be rank-4 tensor, but got rank={t.Rank}.");
+
+            if (t.Dimensions[1] <= 0 || t.Dimensions[2] <= 0 || t.Dimensions[3] <= 0)
+                throw new ArgumentException($"{name} has invalid dims: [{DimsToString(t.Dimensions)}]");
         }
 
+        private static string DimsToString(ReadOnlySpan<int> dims)
+        {
+            var arr = new int[dims.Length];
+            dims.CopyTo(arr);
+            // .NET Framework에선 string.Join<T>(...) 오버로드가 부족하므로 문자열로 변환
+            return string.Join(",", arr.Select(x => x.ToString()).ToArray());
+        }
+
+        /// <summary>
+        /// DenseTensor(N, C, H, W)를 CHW 순으로 1D 배열로 평탄화 (N=1 전제).
+        /// 메모리 레이아웃이 이미 연속(contiguous)이지만, 안전하게 새 배열 생성.
+        /// </summary>
         private static float[] ToCHWArray(DenseTensor<float> t)
         {
-            int c = t.Dimensions[1], h = t.Dimensions[2], w = t.Dimensions[3];
-            float[] arr = new float[c * h * w];
-            int idx = 0;
-            for (int ch = 0; ch < c; ch++)
-                for (int y = 0; y < h; y++)
-                    for (int x = 0; x < w; x++)
-                        arr[idx++] = t[0, ch, y, x];
+            int n = t.Dimensions[0];
+            int c = t.Dimensions[1];
+            int h = t.Dimensions[2];
+            int w = t.Dimensions[3];
+            if (n != 1) throw new ArgumentException($"Expected batch=1, but got {n}.");
+
+            int total = c * h * w;
+            var arr = new float[total];
+
+            // DenseTensor는 기본적으로 row-major이지만, 인덱서로 안전하게 복사
+            // 인덱스: [0, c, h, w]
+            int k = 0;
+            for (int ci = 0; ci < c; ci++)
+                for (int hi = 0; hi < h; hi++)
+                    for (int wi = 0; wi < w; wi++)
+                        arr[k++] = t[0, ci, hi, wi];
+
             return arr;
         }
 
-        private static float[] ResizeBilinearCHW(float[] src, int c, int h, int w, int nh, int nw)
-        {
-            float[] dst = new float[c * nh * nw];
-            for (int ch = 0; ch < c; ch++)
-            {
-                int srcOff = ch * h * w;
-                int dstOff = ch * nh * nw;
-                for (int y = 0; y < nh; y++)
-                {
-                    float gy = ((y + 0.5f) * h / (float)nh) - 0.5f;
-                    int y0 = (int)Math.Floor(gy);
-                    int y1 = y0 + 1;
-                    float ly = gy - y0;
-                    if (y0 < 0) { y0 = 0; y1 = 0; ly = 0f; }
-                    else if (y1 >= h) { y0 = h - 1; y1 = h - 1; ly = 0f; }
-
-                    for (int x = 0; x < nw; x++)
-                    {
-                        float gx = ((x + 0.5f) * w / (float)nw) - 0.5f;
-                        int x0 = (int)Math.Floor(gx);
-                        int x1 = x0 + 1;
-                        float lx = gx - x0;
-                        if (x0 < 0) { x0 = 0; x1 = 0; lx = 0f; }
-                        else if (x1 >= w) { x0 = w - 1; x1 = w - 1; lx = 0f; }
-
-                        float v00 = src[srcOff + y0 * w + x0];
-                        float v01 = src[srcOff + y0 * w + x1];
-                        float v10 = src[srcOff + y1 * w + x0];
-                        float v11 = src[srcOff + y1 * w + x1];
-
-                        float vx0 = v00 + (v01 - v00) * lx;
-                        float vx1 = v10 + (v11 - v10) * lx;
-                        float v = vx0 + (vx1 - vx0) * ly;
-
-                        dst[dstOff + y * nw + x] = v;
-                    }
-                }
-            }
-            return dst;
-        }
-
-        private static float[] ConcatChannelsCHW(float[] a, int cA, float[] b, int cB, int h, int w)
-        {
-            float[] cat = new float[(cA + cB) * h * w];
-            int hw = h * w;
-            for (int ch = 0; ch < cA; ch++)
-                Array.Copy(a, ch * hw, cat, ch * hw, hw);
-            for (int ch = 0; ch < cB; ch++)
-                Array.Copy(b, ch * hw, cat, (cA + ch) * hw, hw);
-            return cat;
-        }
-
+        /// <summary>
+        /// CHW 배열(C,H,W)을 (H*W, C) row-major로 변환한다.
+        /// 즉, 각 (h,w) 위치의 채널 벡터 길이 C를 한 행으로 나열.
+        /// </summary>
         private static float[] CHW_to_PatchesRowMajor(float[] chw, int c, int h, int w)
         {
-            int patches = h * w;
-            float[] rows = new float[patches * c];
-            for (int y = 0; y < h; y++)
-                for (int x = 0; x < w; x++)
+            int patches = h * w;     // 196
+            var rows = new float[patches * c];
+
+            // CHW에서 픽셀 순서: [c, h, w]
+            // 행 인덱스 p = h*W + w
+            // CHW index base = c*(h*W + w)
+            int p = 0;
+            for (int hi = 0; hi < h; hi++)
+            {
+                for (int wi = 0; wi < w; wi++)
                 {
-                    int row = y * w + x;
-                    int rowOff = row * c;
-                    for (int ch = 0; ch < c; ch++)
+                    int baseCHW = (hi * w + wi) * c; // but current chw layout is (c,h,w) flattened as looped above
+                    // 위 ToCHWArray에서 순서가 ci→hi→wi 이므로,
+                    // 현재 chw의 인덱스는 [ci*(h*w) + hi*w + wi].
+                    // 따라서 여기선 다시 계산:
+                    int rowOff = p * c;
+                    for (int ci = 0; ci < c; ci++)
                     {
-                        int chwIndex = ch * h * w + y * w + x;
-                        rows[rowOff + ch] = chw[chwIndex];
+                        int idxCHW = ci * (h * w) + hi * w + wi;
+                        rows[rowOff + ci] = chw[idxCHW];
                     }
+                    p++;
                 }
+            }
             return rows;
         }
 
-        private static void L2NormalizeRowsInPlace(float[] rows, int rowsCnt, int dim)
+        /// <summary>
+        /// rows: (Patches × Dim) row-major 배열의 각 행을 L2 정규화(in-place).
+        /// </summary>
+        public static void L2NormalizeRowsInPlace(float[] rows, int patches, int dim, float eps = 1e-12f)
         {
-            for (int r = 0; r < rowsCnt; r++)
+            int off = 0;
+            for (int p = 0; p < patches; p++)
             {
-                int off = r * dim;
-                double sum = 0.0;
-                for (int j = 0; j < dim; j++) sum += rows[off + j] * rows[off + j];
-                double norm = Math.Sqrt(sum);
-                if (norm > 0)
-                {
-                    float inv = (float)(1.0 / norm);
-                    for (int j = 0; j < dim; j++) rows[off + j] *= inv;
-                }
+                double ss = 0.0;
+                int end = off + dim;
+                for (int i = off; i < end; i++) ss += (double)rows[i] * rows[i];
+                float inv = (float)(1.0 / Math.Sqrt(Math.Max(ss, eps)));
+                for (int i = off; i < end; i++) rows[i] *= inv;
+                off = end;
             }
         }
+    }
+
+    /// <summary>
+    /// 패치 임베딩 컨테이너: (Patches × Dim) row-major.
+    /// </summary>
+    public sealed class PatchEmbeddings
+    {
+        public int GridH { get; set; }     // 14
+        public int GridW { get; set; }     // 14
+        public int Dim { get; set; }     // 1024
+        public int Patches { get; set; }   // 196
+        public float[] RowsRowMajor { get; set; } // length = Patches * Dim
     }
 }

@@ -1,6 +1,6 @@
 {
   "dim": 1024,
-  "ntotal": 16385,
-  "metric": "l2",
-  "note": "Dumped from FAISS. gallery_f32.bin=row-major float32 (ntotal x dim), ids_i32.bin=int32."
+  "ntotal": 4096,
+  "metric": "cosine",
+  "flat_type": "IndexFlatL2"
 }
