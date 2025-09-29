@@ -1,12 +1,13 @@
-﻿using System;
+﻿using Microsoft.ML.OnnxRuntime;
+using Microsoft.ML.OnnxRuntime.Tensors;
+using System;
+using System.Diagnostics;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Drawing;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using Microsoft.ML.OnnxRuntime;
-using Microsoft.ML.OnnxRuntime.Tensors;
 
 namespace PatchCoreOnnxDemo
 {
@@ -106,6 +107,7 @@ namespace PatchCoreOnnxDemo
                 {
                     try
                     {
+                        MathNet.Numerics.Control.UseNativeMKL();
                         _exportDir = fbd.SelectedPath;
 
                         // 아티팩트 로드
@@ -152,36 +154,60 @@ namespace PatchCoreOnnxDemo
                     // 백그라운드에서 추론 실행
                     var result = await Task.Run(() =>
                     {
-                        // 1) 전처리 → 입력 텐서 [1,3,224,224]
+                        var totalSW = Stopwatch.StartNew();
+
+                        // 1) 전처리
+                        var sw = Stopwatch.StartNew();
                         DenseTensor<float> input = ImagePreprocessor.PreprocessToCHW(imagePath, _pp);
+                        sw.Stop();
+                        long tPre = sw.ElapsedMilliseconds;
 
                         // 2) ONNX 실행 → "layer3" 출력
-                        var results = OnnxRunner.Run(_session, input);
-                        var tL3 = results.First(r => r.Name == "layer3").AsTensor<float>();
-
-                        // 3) L3-only 패치 임베딩 (196×1024) + 행별 L2 정규화
-                        var pe = PatchEmbedder.BuildFromL3(tL3);
-
-                        if (pe.Dim != _artifacts.Dim)
-                            throw new InvalidDataException($"patch-dim({pe.Dim}) != gallery-dim({_artifacts.Dim})");
-
-                        // 4) 코사인 거리(1−dot), k=1 → patch별 최소거리 → 이미지 스코어=max
-                        var patchMin = new float[pe.Patches];
-                        Distance.RowwiseMinDistances(
-                            pe.RowsRowMajor, pe.Patches, pe.Dim,
-                            _artifacts.Gallery, _artifacts.GalleryRows,
-                            "ip", patchMin);
-
-                        float imgScore = patchMin.Max();
-                        bool isAnomaly = imgScore > _artifacts.Threshold;
-
-                        return new InferOut
+                        sw.Restart();
+                        using (var results = OnnxRunner.Run(_session, input))
                         {
-                            ImageScore = imgScore,
-                            IsAnomaly = isAnomaly,
-                            ImagePath = imagePath,
-                            PatchMin = patchMin
-                        };
+                            var tL3 = results.First(r => r.Name == "layer3").AsTensor<float>();
+                            sw.Stop();
+                            long tOnnx = sw.ElapsedMilliseconds;
+
+                            // 3) L3-only 패치 임베딩 (196×1024) + 행별 L2 정규화
+                            sw.Restart();
+                            var pe = PatchEmbedder.BuildFromL3(tL3);
+                            sw.Stop();
+                            long tEmbed = sw.ElapsedMilliseconds;
+
+                            if (pe.Dim != _artifacts.Dim)
+                                throw new InvalidDataException($"patch-dim({pe.Dim}) != gallery-dim({_artifacts.Dim})");
+
+                            // 4) 코사인 거리(1−dot), k=1 → patch별 최소거리 → 이미지 스코어=max
+                            sw.Restart();
+                            var patchMin = new float[pe.Patches];
+                            Distance.RowwiseMinDistancesIP_MKL(
+                                pe.RowsRowMajor, pe.Patches, pe.Dim,
+                                _artifacts.Gallery, _artifacts.GalleryRows,
+                                patchMin);
+                            sw.Stop();
+                            long tDist = sw.ElapsedMilliseconds;
+
+                            float imgScore = patchMin.Max();
+                            bool isAnomaly = imgScore > _artifacts.Threshold;
+
+                            totalSW.Stop();
+                            long tTotal = totalSW.ElapsedMilliseconds;
+
+                            return new InferOut
+                            {
+                                ImageScore = imgScore,
+                                IsAnomaly = isAnomaly,
+                                ImagePath = imagePath,
+                                PatchMin = patchMin,
+                                TPreprocessMs = tPre,
+                                TOnnxMs = tOnnx,
+                                TEmbedMs = tEmbed,
+                                TDistanceMs = tDist,
+                                TTotalMs = tTotal
+                            };
+                        }
                     });
 
                     // 결과 표시 + 나중에 히트맵용으로 저장
@@ -189,7 +215,10 @@ namespace PatchCoreOnnxDemo
                     _lastImagePath = result.ImagePath;
 
                     var label = result.IsAnomaly ? "NotGood" : "Good";
-                    lblResult.Text = $"결과: score={result.ImageScore:F6} / thr={_artifacts.Threshold:F6} → {label}\n({Path.GetFileName(result.ImagePath)})";
+                    lblResult.Text =
+                        $"결과: score={result.ImageScore:F6} / thr={_artifacts.Threshold:F6} → {label}\n" +
+                        $"파일: {Path.GetFileName(result.ImagePath)}\n" +
+                        $"시간(ms): total={result.TTotalMs} | pre={result.TPreprocessMs} | onnx={result.TOnnxMs} | embed={result.TEmbedMs} | dist={result.TDistanceMs}";
 
                     btnOverlay.Enabled = true;
                 }
@@ -205,6 +234,7 @@ namespace PatchCoreOnnxDemo
                 }
             }
         }
+
 
         private void BtnOverlay_Click(object sender, EventArgs e)
         {
@@ -241,6 +271,13 @@ namespace PatchCoreOnnxDemo
             public bool IsAnomaly { get; set; }
             public string ImagePath { get; set; }
             public float[] PatchMin { get; set; }
+
+            public long TPreprocessMs { get; set; }
+            public long TOnnxMs { get; set; }
+            public long TEmbedMs { get; set; }
+            public long TDistanceMs { get; set; }
+            public long TTotalMs { get; set; }
         }
+
     }
 }
