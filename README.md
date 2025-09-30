@@ -1,5 +1,11 @@
 # 📂 PatchCore Colab 산출물 파일 설명 (최종)
 
+---
+
+<img width="1090" height="823" alt="image" src="https://github.com/user-attachments/assets/3a57271d-6e25-4676-b044-9acf2b957939" />
+
+---
+
 ## 1. `wrn50_l3.onnx` → **특징 추출기**
 
 * **무엇?**
