@@ -1,79 +1,61 @@
-# 📂 PatchCore Colab 산출물 파일 설명
+# 📂 PatchCore Colab 산출물 파일 설명 (최종)
 
-## 1. `wrn50_l2l3.onnx`
+## 1. `wrn50_l3.onnx`
 - **무엇?**  
-  WideResNet-50-2 모델을 **ONNX 형식**으로 변환한 파일
-  이미지를 넣으면 **layer2, layer3 특징맵**을 뽑아줍니다.
+  WideResNet-50-2 백본을 ONNX로 내보낸 파일.  
+  이미지를 넣으면 **layer3 특징맵**을 출력합니다 (출력: `[1,1024,14,14]`).
 - **왜 필요?**  
-  C#에서는 PyTorch를 못 쓰니까, ONNX Runtime을 통해 이 모델을 실행해서  
-  PatchCore가 사용하는 “특징 벡터(feature embedding)”를 얻습니다.  
-- **비유**: 원재료(이미지)를 반죽(특징맵)으로 만들어주는 “믹서기”.
+  PyTorch를 쓸 수 없는 .NET 환경에서 ONNX Runtime을 통해 임베딩을 얻어야 합니다.  
+  PatchCore는 이 layer3 임베딩을 기반으로 anomaly score를 계산합니다.
+- **비유**: 원재료(이미지)를 “밀가루 반죽(특징맵)”으로 바꿔주는 믹서기.
 
 ---
 
-## 2. `nnscorer_search_index.faiss`
+## 2. `gallery_f32.bin`
 - **무엇?**  
-  학습 단계에서 만들어진 **FAISS 검색 인덱스**
-  1024차원 임베딩 공간에서 “이 벡터가 정상군과 얼마나 가까운지” 계산하는 DB.
+  학습 데이터에서 추출한 정상 샘플들의 **feature 메모리**.  
+  float32 배열로, `(N×1024)` 크기의 row-major 구조이며 각 행은 L2 정규화되어 있음.
 - **왜 필요?**  
-  추론 시 새 이미지의 특징을 여기서 검색해서  
-  “정상/비정상” 정도를 거리(score)로 판단합니다.  
-- **비유**: 정상 샘플들이 들어있는 “카탈로그/도감”. 새 샘플이 이 도감과 비슷하면 정상.
+  새 이미지가 들어오면, 이 갤러리와 코사인 거리(1 − dot)를 비교하여  
+  “정상과 얼마나 가까운지”를 판단합니다.
+- **비유**: 정상 샘플들이 차곡차곡 들어있는 “참고 도감”.
 
 ---
 
-## 3. `csharp_config.json`
+## 3. `threshold.json`
 - **무엇?**  
-  **전처리 설정** 파일.  
-  - 이미지 크기 (resize 256, crop 224)  
-  - 정규화 mean/std 값  
-  - 기타 inference 시 필요한 옵션들
+  학습 데이터(Good set)의 분포를 기반으로 산출된 **임계값**.  
+  - `"value"`: 스코어 기준치 (예: 0.0509)  
+  - `"metric"`: 거리 방식 (`"cosine"`)
 - **왜 필요?**  
-  ONNX 모델에 이미지를 넣을 때 반드시 같은 전처리를 해야  
-  학습 시와 같은 embedding을 얻을 수 있습니다.  
-- **비유**: 요리 레시피에서 “재료 손질법”.
+  추론 시 `score > threshold` → **NotGood**,  
+  `score ≤ threshold` → **Good** 으로 판정합니다.
+- **비유**: 시험 합격선 같은 “커트라인”.
 
 ---
 
-## 4. `params_meta.json`
+## 4. `meta.json`
 - **무엇?**  
-  원래 Python PatchCore 모델에서 쓰던 파라미터 요약본.  
-  - 보통은 projection matrix, bias 등이 들어있는데  
-  - 현재 버전에선 projection이 비어 있어서 **그냥 1024차원 그대로** 씁니다.
+  모델 실행/전처리 환경 메타데이터.  
+  - `input_size` (224)  
+  - `mean/std` (ImageNet 값)  
+  - `backbone` (`wrn50_l3`)  
 - **왜 필요?**  
-  혹시 projection이 있을 경우, C#에서 그대로 재현해야 하기 때문.  
-  (이번 모델은 projection 없음 → 단순화됨)
-- **비유**: “설계도”인데 이번에는 추가 공정이 없어서 빈칸.
-
----
-
-## 5. `manifest.json`
-- **무엇?**  
-  내보내기 툴에서 만든 “메타 정보” 파일.  
-  어떤 파일이 있고 어떤 버전인지 정리해 둔 관리용 문서.
-- **왜 필요?**  
-  꼭 없어도 동작은 하지만, 버전 추적/자동화 스크립트에서 유용합니다.  
-- **비유**: “이 박스 안에는 어떤 부품이 들어있다”라는 포장 리스트.
-
----
-
-## 6. `patchcore_params.pkl`
-- **무엇?**  
-  Python에서 쓰는 원래 PatchCore 모델 파라미터 (피클 형식).  
-- **왜 필요?**  
-  Colab/Python용 백업일 뿐, C#에서 직접 쓰진 않습니다.  
-  (우린 ONNX + JSON + FAISS만 쓰면 됨)
-- **비유**: 원래 원본 레시피 노트북. 직접 요리할 땐 안 보고, 참고용으로만 보관.
+  Colab과 C#에서 동일한 전처리를 맞추기 위한 기준서.
+- **비유**: 요리 레시피의 “재료 손질법”.
 
 ---
 
 # ✅ 정리
-- **C# 필수**:  
-  `wrn50_l2l3.onnx`, `nnscorer_search_index.faiss`, `csharp_config.json`  
-- **옵션/참고**:  
-  `params_meta.json`, `manifest.json`  
-- **Python 전용**:  
-  `patchcore_params.pkl`  
+- **C# 필수** (반드시 있어야 함):  
+  - `wrn50_l3.onnx`  
+  - `gallery_f32.bin`  
+  - `threshold.json`  
+  - `meta.json`  
 
-즉, **실제 C# 추론 구현 시 반드시 필요한 파일은 3개**이고,  
-나머지는 참고 자료/백업이에요.
+- **Python/백업 전용 (C#에서 안 씀)**:  
+  - `patchcore_params.pkl` (원래 PyTorch 모델 파라미터)  
+  - `nnscorer_search_index.faiss` (Python용 검색 인덱스)  
+  - 기타 manifest, exporter 로그  
+
+즉, **C# 추론·오버레이 구현에 필요한 건 딱 4개**입니다.  
