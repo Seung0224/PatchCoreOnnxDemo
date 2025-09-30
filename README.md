@@ -1,7 +1,7 @@
 # 📂 PatchCore Colab 산출물 파일 설명 (최종)
 
 ---
-<img width="1092" height="822" alt="image" src="https://github.com/user-attachments/assets/2f0b9aca-0fc3-4e61-b580-e7a6f619c46a" />
+<img width="1089" height="821" alt="image" src="https://github.com/user-attachments/assets/30116756-9ede-4513-b5cb-8f0302545d87" />
 
 <img width="1090" height="823" alt="image" src="https://github.com/user-attachments/assets/3a57271d-6e25-4676-b044-9acf2b957939" />
 
