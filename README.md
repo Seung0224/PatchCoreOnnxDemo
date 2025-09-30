@@ -126,5 +126,6 @@
 
   * `patchcore_params.pkl` (PyTorch 파라미터)
   * `nnscorer_search_index.faiss` (Python용 검색 인덱스)
+ 
 
 즉, **C# 추론·오버레이 구현에 필요한 건 딱 4개**입니다.
